@@ -1,0 +1,30 @@
+name: Weekly property value tracker
+
+on:
+  schedule:
+    # Sunday 21:00 UTC (~Monday morning AEST/AWST)
+    - cron: '0 21 * * 0'
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  scrape:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - run: npm ci
+
+      - run: npx playwright install --with-deps chromium
+
+      - run: node scraper/run.js
+        env:
+          GOOGLE_SERVICE_ACCOUNT_KEY: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_KEY }}
+          SHEET_ID: ${{ secrets.SHEET_ID }}
+          NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
