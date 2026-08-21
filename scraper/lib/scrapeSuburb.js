@@ -1,17 +1,20 @@
-const { extractArgonautJson, findFirstByKeySubstring } = require('./parseArgonaut');
+const { extractArgonautJson, findFirstByKeySubstring, extractDollarNearText } = require('./parseArgonaut');
 const { looksLikeChallengePage } = require('./browser');
 
-// realestate.com.au's suburb/neighbourhood profile pages follow a
-// predictable slug pattern, so (unlike individual properties) we can build
-// the URL directly instead of driving an on-site search. `urlSlugOverride`
-// in scraper/config/targets.js can replace this if the built slug turns out
-// to be wrong for a given suburb once run against the live site.
+// realestate.com.au's suburb profile pages follow a predictable slug
+// pattern confirmed against the live site (2026-08-21):
+// https://www.realestate.com.au/<state-lower>/<suburb-slug>-<postcode>/
+// e.g. https://www.realestate.com.au/vic/fitzroy-north-3068/
+// `urlSlugOverride` in scraper/config/targets.js can replace the built
+// path (minus the https://www.realestate.com.au/ prefix) if a suburb's
+// real slug ever diverges from this pattern (e.g. multi-word suburb names
+// with unusual punctuation).
 function buildSuburbUrl(suburb) {
   if (suburb.urlSlugOverride) {
-    return `https://www.realestate.com.au/neighbourhoods/${suburb.urlSlugOverride}`;
+    return `https://www.realestate.com.au/${suburb.urlSlugOverride}`;
   }
   const slug = suburb.suburb.toLowerCase().trim().replace(/\s+/g, '-');
-  return `https://www.realestate.com.au/neighbourhoods/${slug}-${suburb.postcode}-${suburb.state.toLowerCase()}`;
+  return `https://www.realestate.com.au/${suburb.state.toLowerCase()}/${slug}-${suburb.postcode}/`;
 }
 
 // Scrapes a suburb profile page for median price / QoQ change / any
@@ -29,7 +32,11 @@ async function scrapeSuburb(context, suburb) {
     }
 
     const data = extractArgonautJson(html);
-    const medianPrice = data && findFirstByKeySubstring(data, ['medianprice', 'median']);
+    const bodyText = await page.locator('body').innerText().catch(() => '');
+
+    const medianPrice =
+      (data && findFirstByKeySubstring(data, ['medianprice', 'median'])) ||
+      extractDollarNearText(bodyText, 'median');
     const qoqChangePct = data && findFirstByKeySubstring(data, ['quarterlychange', 'qoq', 'quarteronquarter']);
     const projectionText = data && findFirstByKeySubstring(data, ['projection', 'forecast']);
 
