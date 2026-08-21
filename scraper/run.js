@@ -1,6 +1,8 @@
-// Weekly orchestrator: scrapes realestate.com.au for each tracked property's
-// realEstimate and each tracked suburb's market trend, pulls property-market
-// news via Google News RSS, and writes everything to a Google Sheet.
+// Weekly orchestrator: for each tracked property, scrapes an estimated
+// value from Domain; for each tracked suburb, scrapes a median-price trend
+// from a free source chosen by state (VIC: the official Victorian Property
+// Sales Report CSV; WA: REIWA's suburb profile page); pulls property-market
+// news via Google News RSS; writes everything to a Google Sheet.
 //
 // Failure philosophy: every property/suburb/news item is scraped
 // independently, so one blocked/broken item never stops the others. Rows are
@@ -13,9 +15,10 @@
 const fs = require('fs');
 const targets = require('./config/targets');
 const { launchBrowser, newContext, randomDelay, withRetry } = require('./lib/browser');
-const { resolveProperty } = require('./lib/resolveProperty');
-const { scrapeProperty } = require('./lib/scrapeProperty');
-const { scrapeSuburb } = require('./lib/scrapeSuburb');
+const { resolveDomainProperty } = require('./lib/resolveDomainProperty');
+const { scrapeDomainProperty } = require('./lib/scrapeDomainProperty');
+const { scrapeVicSuburbTrend } = require('./lib/scrapeVicSuburbTrend');
+const { scrapeReiwaSuburbTrend } = require('./lib/scrapeReiwaSuburbTrend');
 const { scrapeNews } = require('./lib/scrapeNews');
 const { getSheetsClient } = require('./sheets/serviceAccountClient');
 const { ensureTab } = require('./sheets/ensureSheet');
@@ -23,15 +26,21 @@ const { appendRows } = require('./sheets/appendRows');
 
 const PROPERTY_HEADERS = [
   'date', 'address', 'suburb', 'estimate', 'confidence',
-  'beds', 'baths', 'car', 'lastUpdated', 'sourceUrl', 'status',
+  'beds', 'baths', 'car', 'lastUpdated', 'sourceUrl', 'source', 'status',
 ];
 const SUBURB_HEADERS = [
-  'date', 'suburb', 'medianPrice', 'qoqChangePct', 'projectionText', 'sourceUrl', 'status',
+  'date', 'suburb', 'medianPrice', 'qoqChangePct', 'projectionText', 'sourceUrl', 'source', 'status',
 ];
 const NEWS_HEADERS = ['dateScraped', 'suburb', 'headline', 'source', 'publishedDate', 'link'];
 
 function todayIso() {
   return new Date().toISOString().slice(0, 10);
+}
+
+// Builds a row in header order from a plain object, so adding/reordering
+// columns can't silently misalign values by position.
+function rowFromHeaders(headers, data) {
+  return headers.map((h) => (data[h] ?? '') + '');
 }
 
 async function scrapePropertyRows(context, date) {
@@ -40,15 +49,14 @@ async function scrapePropertyRows(context, date) {
 
   for (const property of targets.properties) {
     try {
-      const profileUrl = await withRetry(() => resolveProperty(context, property.address));
-      const result = await withRetry(() => scrapeProperty(context, profileUrl));
-      rows.push([
-        date, property.address, property.suburb, result.estimate, result.confidence,
-        result.beds, result.baths, result.car, result.lastUpdated, result.sourceUrl, result.status,
-      ]);
+      const profileUrl = await withRetry(() => resolveDomainProperty(context, property.address));
+      const result = await withRetry(() => scrapeDomainProperty(context, profileUrl));
+      rows.push(rowFromHeaders(PROPERTY_HEADERS, { date, address: property.address, suburb: property.suburb, ...result }));
       summary.push({ label: `Property: ${property.address}`, ok: true });
     } catch (err) {
-      rows.push([date, property.address, property.suburb, '', '', '', '', '', '', '', String(err.message || err)]);
+      rows.push(rowFromHeaders(PROPERTY_HEADERS, {
+        date, address: property.address, suburb: property.suburb, status: String(err.message || err),
+      }));
       summary.push({ label: `Property: ${property.address}`, ok: false, error: String(err.message || err) });
     }
     await randomDelay();
@@ -57,20 +65,30 @@ async function scrapePropertyRows(context, date) {
   return { rows, summary };
 }
 
+// Routes each suburb to a free data source by state - VIC has a solid
+// official CSV dataset, WA doesn't (REIWA's suburb profile page is the best
+// free option found). Suburbs outside these two states aren't covered yet.
+async function scrapeSuburbTrend(context, suburb) {
+  if (suburb.state === 'VIC') {
+    return scrapeVicSuburbTrend(suburb);
+  }
+  if (suburb.state === 'WA') {
+    return scrapeReiwaSuburbTrend(context, suburb);
+  }
+  throw new Error(`No suburb-trend source configured for state ${suburb.state}`);
+}
+
 async function scrapeSuburbRows(context, date) {
   const rows = [];
   const summary = [];
 
   for (const suburb of targets.suburbs) {
     try {
-      const result = await withRetry(() => scrapeSuburb(context, suburb));
-      rows.push([
-        date, suburb.suburb, result.medianPrice, result.qoqChangePct,
-        result.projectionText, result.sourceUrl, result.status,
-      ]);
-      summary.push({ label: `Suburb: ${suburb.suburb}`, ok: true });
+      const result = await withRetry(() => scrapeSuburbTrend(context, suburb));
+      rows.push(rowFromHeaders(SUBURB_HEADERS, { date, suburb: suburb.suburb, ...result }));
+      summary.push({ label: `Suburb: ${suburb.suburb} (${result.source})`, ok: true });
     } catch (err) {
-      rows.push([date, suburb.suburb, '', '', '', '', String(err.message || err)]);
+      rows.push(rowFromHeaders(SUBURB_HEADERS, { date, suburb: suburb.suburb, status: String(err.message || err) }));
       summary.push({ label: `Suburb: ${suburb.suburb}`, ok: false, error: String(err.message || err) });
     }
     await randomDelay();

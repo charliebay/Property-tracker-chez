@@ -39,24 +39,42 @@ This was remixed from [https://glitch.com/~google-sheets](https://glitch.com/~go
 ## Weekly property value tracker (`scraper/`)
 
 A separate, self-contained job (unrelated to the iOS Shortcut webhook above,
-and using its own Google auth) that scrapes realestate.com.au weekly for a
-configured list of properties and suburbs, plus property-market news via
-Google News RSS, and logs the results to a Google Sheet. It runs on a
+and using its own Google auth) that, weekly, estimates each tracked
+property's value, pulls each tracked suburb's price trend, and pulls
+property-market news — then logs it all to a Google Sheet. It runs on a
 schedule via `.github/workflows/weekly-property-scrape.yml` — no server
 needs to be running.
 
-**Heads up:** realestate.com.au's Terms of Service prohibit automated
-scraping, and the site runs bot detection. This was built with that risk
-accepted — expect some weeks to log partial results (see the `status`
-column in the sheet) rather than assuming 100% success every run.
+### Data sources (chosen to stay free, prefer official/structured data over
+### scraping wherever a free structured source exists)
+
+| Data | Source | Notes |
+|---|---|---|
+| Property estimate (all states) | Domain.com.au property profile page | Scraped — Domain has no ToS-clean free API. Unverified against the live site (see caveat below); may be gated for anonymous visitors. |
+| VIC suburb trend | [Victorian Property Sales Report](https://discover.data.vic.gov.au/dataset/victorian-property-sales-report-median-house-by-suburb) | Free, CC BY 4.0, official CSV via the state's open-data (CKAN) API — no scraping, no ToS risk. Median house price by suburb, quarterly. |
+| WA suburb trend | REIWA suburb profile page (`reiwa.com.au/suburb/<slug>/`) | Scraped — WA has no equivalent free structured dataset (Landgate's useful data is paid). Unverified against the live site. |
+| Property-market news (all suburbs) | Google News RSS | Free, meant for automated consumption — no ToS risk. |
+
+**Heads up on the two scraped sources (Domain, REIWA):** both are built
+best-effort from documentation/research, not a live inspection of the
+actual pages, because this development environment's network can't reach
+either site. Expect the first live run to need the same kind of
+selector/URL fix-up the original realestate.com.au version needed — check
+the `status` column and the workflow's step summary after each run, and
+supply real page structure (e.g. via browser devtools) if something's
+stuck on `SELECTOR_MISS` or a timeout.
 
 ### What it tracks
 
 Edit `scraper/config/targets.js` to change what's tracked — no other file
-needs editing. Each run writes to three tabs (auto-created on first run):
+needs editing. Only VIC and WA suburbs have a trend source configured
+today; other states would need a new `scrapeXSuburbTrend.js` module (see
+`scraper/lib/scrapeVicSuburbTrend.js` and `scrapeReiwaSuburbTrend.js` for
+the pattern) and a case added to `scrapeSuburbTrend()` in `scraper/run.js`.
+Each run writes to three tabs (auto-created on first run):
 
-- `PropertySnapshots` — per-property realEstimate, confidence, beds/baths/car
-- `SuburbTrends` — per-suburb median price, QoQ change, price projection
+- `PropertySnapshots` — per-property estimate, confidence, beds/baths/car, which source it came from
+- `SuburbTrends` — per-suburb median price, QoQ change, price projection, which source it came from
 - `NewsItems` — recent property-market news per suburb
 
 ### One-time setup
