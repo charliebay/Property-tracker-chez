@@ -1,0 +1,39 @@
+name: Weekly property value tracker
+
+on:
+  schedule:
+    # Sunday 21:00 UTC (~Monday morning AEST/AWST)
+    - cron: '0 21 * * 0'
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+  id-token: write # required to mint the OIDC token Workload Identity Federation exchanges for Google credentials
+
+jobs:
+  scrape:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - run: npm ci
+
+      - run: npx playwright install --with-deps chromium
+
+      # Exchanges this run's GitHub OIDC token for short-lived Google
+      # credentials via Workload Identity Federation - no service-account
+      # JSON key needed. Populates Application Default Credentials, which
+      # scraper/sheets/serviceAccountClient.js picks up automatically.
+      - uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT_EMAIL }}
+
+      - run: node scraper/run.js
+        env:
+          SHEET_ID: ${{ secrets.SHEET_ID }}
+          NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
