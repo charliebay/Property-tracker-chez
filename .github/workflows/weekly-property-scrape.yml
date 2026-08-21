@@ -8,6 +8,7 @@ on:
 
 permissions:
   contents: read
+  id-token: write # required to mint the OIDC token Workload Identity Federation exchanges for Google credentials
 
 jobs:
   scrape:
@@ -23,8 +24,16 @@ jobs:
 
       - run: npx playwright install --with-deps chromium
 
+      # Exchanges this run's GitHub OIDC token for short-lived Google
+      # credentials via Workload Identity Federation - no service-account
+      # JSON key needed. Populates Application Default Credentials, which
+      # scraper/sheets/serviceAccountClient.js picks up automatically.
+      - uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT_EMAIL }}
+
       - run: node scraper/run.js
         env:
-          GOOGLE_SERVICE_ACCOUNT_KEY: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_KEY }}
           SHEET_ID: ${{ secrets.SHEET_ID }}
           NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
